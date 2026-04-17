@@ -21,16 +21,21 @@ namespace InkTester
             public int maxSteps = 10000;
             // Treat exceeded maxTurns as an error?
             public bool maxStepsErrors = true;
+            // Max milliseconds a single Continue() call may take before the run is abandoned.
+            public float continueTimeoutMs = 500f;
             // Running in Out of Content mode
             public bool ooc = false;
             // If set, limits the number of choices to this number
             public int maxChoices = -1;
+            // If set, each run starts from one of these knots (cycling) instead of the story start.
+            public List<string> startKnots = new();
         }
         private Options _options;
 
 
         private IFileHandler _fileHandler = new DefaultFileHandler();
         private bool _inkErrors = false;
+        private bool _timedOut = false;
 
         private int _lastValidLineNum = -1;
         private string _lastValidFile = "";
@@ -47,6 +52,56 @@ namespace InkTester
 
         public Tester(Options? options = null) {
             _options = options ?? new Options();
+        }
+
+        public List<string>? GetKnotNames() {
+
+            _previousCWD = Environment.CurrentDirectory;
+
+            string folderPath = _options.folder;
+            if (String.IsNullOrWhiteSpace(folderPath))
+                folderPath = _previousCWD;
+            folderPath = System.IO.Path.GetFullPath(folderPath);
+
+            string inkFilePath = System.IO.Path.Combine(folderPath, _options.storyFile);
+            if (!File.Exists(inkFilePath)) {
+                Console.Error.WriteLine($"Error - can't find storyFile: {inkFilePath}");
+                return null;
+            }
+
+            Directory.SetCurrentDirectory(folderPath);
+
+            var content = _fileHandler.LoadInkFileContents(inkFilePath);
+            InkParser parser = new InkParser(content!, _options.storyFile, OnError, _fileHandler);
+            var parsedStory = parser.Parse();
+
+            Directory.SetCurrentDirectory(_previousCWD);
+
+            if (_inkErrors) {
+                Console.Error.WriteLine("Error parsing ink file.");
+                return null;
+            }
+
+            var tunnelTargets = parsedStory.FindAll<Ink.Parsed.Divert>()
+                .Where(d => d.isTunnel && d.target != null)
+                .Select(d => d.target.dotSeparatedComponents.Split('.')[0])
+                .ToHashSet();
+
+            return parsedStory.FindAll<Ink.Parsed.Knot>()
+                .Where(k => !k.isFunction)
+                .Where(k => !tunnelTargets.Contains(k.name))
+                .Where(k => !k.FindAll<Ink.Parsed.TunnelOnwards>().Any())
+                .Select(k => k.name)
+                .OrderBy(n => n)
+                .ToList();
+        }
+
+        public bool WriteKnotList(string outputPath) {
+            var knots = GetKnotNames();
+            if (knots == null) return false;
+            File.WriteAllLines(System.IO.Path.GetFullPath(outputPath), knots);
+            Console.WriteLine($"{knots.Count} knots written to {outputPath}");
+            return true;
         }
 
         public bool Run() {
@@ -117,7 +172,8 @@ namespace InkTester
             LineTagger tagger = new LineTagger();
             tagger.Tag(parsedStory);
 
-            // Convert the parsed story into a runtime story.
+            // Convert the parsed story into a runtime story, then cache as JSON
+            // so we can reconstruct it if a run gets stuck mid-ContinueAsync.
             Ink.Runtime.Story story = parsedStory.ExportRuntime(OnError);
 
             if (story == null)
@@ -126,6 +182,15 @@ namespace InkTester
             story.onError += OnError;
             story.allowExternalFunctionFallbacks = true;
 
+            string compiledJson = story.ToJson();
+
+            Ink.Runtime.Story NewStory() {
+                var s = new Ink.Runtime.Story(compiledJson);
+                s.onError += OnError;
+                s.allowExternalFunctionFallbacks = true;
+                return s;
+            }
+
             OOCLog.Clear();
             VisitLog.Clear();
 
@@ -133,9 +198,26 @@ namespace InkTester
 
             // Let's do all our test runs.
             for(int runNum=0;runNum<_options.testRuns;runNum++) {
-                
-                // Reset the story.
-                story.ResetState();
+
+                if (_timedOut) {
+                    // Story is stuck in ContinueAsync - rebuild from JSON instead of ResetState.
+                    _timedOut = false;
+                    story = NewStory();
+                } else {
+                    story.ResetState();
+                }
+
+                // If start knots are supplied, cycle through them.
+                if (_options.startKnots.Count > 0) {
+                    var knot = _options.startKnots[runNum % _options.startKnots.Count];
+                    try {
+                        story.ChoosePathString(knot);
+                    }
+                    catch (Exception) {
+                        Console.Error.WriteLine($"Can't find start knot '{knot}'. Check the knot name exists in your Ink.");
+                        return false;
+                    }
+                }
 
                 // If a --testVar was supplied, set it to true
                 if (!String.IsNullOrWhiteSpace(_options.testVar)) {
@@ -198,9 +280,11 @@ namespace InkTester
             Console.WriteLine($"Test run {runNum+1}...");
 
             int steps = 0;
-            
+            var runTrace = new List<string>();
+
             // Clear the out-of-content error
             _oocError = false;
+            _inkErrors = false;
 
             _lastValidLineNum = -1;
             _lastValidFile = "";
@@ -221,7 +305,17 @@ namespace InkTester
                     }
                     steps++;
 
-                    string text = story.Continue();
+                    story.ContinueAsync(_options.continueTimeoutMs);
+                    if (!story.asyncContinueComplete) {
+                        var timeoutMsg = $"Possible infinite loop after '{_lastValidFile}' line {_lastValidLineNum}: {_lastValidText?.Trim()}";
+                        var trace = string.Join(" | ", runTrace);
+                        Console.Error.WriteLine($"Ink Error: Run {runNum+1} timed out - {timeoutMsg}");
+                        Console.Error.WriteLine($"  Trace: {trace}");
+                        AddErrorEntry("Timeout", timeoutMsg, trace);
+                        _timedOut = true;
+                        return true;
+                    }
+                    string text = story.currentText;
 
                     if (_options.ooc && _oocError)
                         return true;
@@ -246,8 +340,10 @@ namespace InkTester
                         }
                     }
 
-                    if (_inkErrors)
-                        return false;
+                    if (_inkErrors) {
+                        _inkErrors = false;
+                        return true;
+                    }
                 }
 
                 // No more choices? End of story!
@@ -261,10 +357,13 @@ namespace InkTester
                 int choiceCount = story.currentChoices.Count;
                 if (_options.maxChoices>0 && choiceCount>_options.maxChoices)
                     choiceCount = _options.maxChoices;
-                story.ChooseChoiceIndex(_random.Next(choiceCount));
+                int choiceIdx = _random.Next(choiceCount);
+                var choiceText = story.currentChoices[choiceIdx].text.Trim();
+                runTrace.Add($"[{_lastValidFile}:{_lastValidLineNum}] ({choiceIdx+1}/{choiceCount}): {choiceText}");
+                story.ChooseChoiceIndex(choiceIdx);
             }
 
-            return !_inkErrors;
+            return true;
         }
         
 
@@ -274,6 +373,7 @@ namespace InkTester
                 return;
             if (type==ErrorType.Warning) {
                 Console.Error.WriteLine("Ink Warning: "+message);
+                AddErrorEntry("Warning", message);
                 return;
             }
 
@@ -301,6 +401,26 @@ namespace InkTester
             }
             _inkErrors = true;
             Console.Error.WriteLine("Ink Error: "+message);
+            AddErrorEntry("Error", message);
+        }
+
+        private void AddErrorEntry(string type, string message, string trace = "") {
+            var entry = new ErrorEntry {
+                Type = type,
+                ErrorText = message,
+                LastGoodFileName = _lastValidFile,
+                LastGoodLineNumber = _lastValidLineNum,
+                LastGoodText = _lastValidText?.Trim() ?? "",
+                Trace = trace
+            };
+            if (!ErrorLog.Any(e =>
+                e.Type == entry.Type &&
+                e.ErrorText == entry.ErrorText &&
+                e.LastGoodFileName == entry.LastGoodFileName &&
+                e.LastGoodLineNumber == entry.LastGoodLineNumber))
+            {
+                ErrorLog.Add(entry);
+            }
         }
 
         // This is what gets stored in the visit log
@@ -320,6 +440,16 @@ namespace InkTester
             public required string LastGoodText {get;set;}
         }
         public List<OOCEntry> OOCLog = new();
+
+        public class ErrorEntry {
+            public required string Type { get; set; } // "Error" or "Timeout"
+            public required string ErrorText { get; set; }
+            public required string LastGoodFileName { get; set; }
+            public int LastGoodLineNumber { get; set; }
+            public required string LastGoodText { get; set; }
+            public string Trace { get; set; } = "";
+        }
+        public List<ErrorEntry> ErrorLog = new();
 
         private Dictionary<string, string[]> _buildFileContent = new();
 

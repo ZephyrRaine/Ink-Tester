@@ -6,7 +6,7 @@
     <OutputType>Exe</OutputType>
     <Version>0.0.4.0</Version>
     <TargetFramework>net8.0</TargetFramework>
-    <RuntimeIdentifiers>osx-arm64;osx-x64;win-x64;win-x86</RuntimeIdentifiers>
+    <RuntimeIdentifiers>osx-arm64;osx-x64;win-x64;win-x86;linux-x64</RuntimeIdentifiers>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PublishSingleFile>true</PublishSingleFile>

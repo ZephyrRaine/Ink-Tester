@@ -6,6 +6,7 @@
 
 - [Overview](#overview)
 - [Command-Line Tool](#command-line-tool)
+- [Error Reporting](#error-reporting)
 - [Releases](#releases)
 - [FAQ](#faq)
 - [Caveats](#caveats)
@@ -46,11 +47,15 @@ Set the Ink variable TEST_MODE to true, run the tool on the file Main.ink in the
 Run an out-of-content check to report.csv instead.\
 `InkTesterTool.exe --storyFile=Main.ink --csv=output/report.csv --ooc`
 
+Test every knot in the story automatically, starting each run from a different knot. Useful when knots are called externally by game code rather than reached through normal story flow.\
+`InkTesterTool.exe --storyFile=Main.ink --csv=report.csv --testAllKnots`
+
 *Is the utility failing to run on Windows? Check the [security issues](#security-issues) note here.*
 
 ### Arguments
 
 * `--folder=<folder>`
+
     Folder to act as root folder when testing the Ink. Used for locating include files.\
     e.g. `--folder=inkFiles/`\
     Default is the current working dir.
@@ -64,7 +69,8 @@ Run an out-of-content check to report.csv instead.\
 
     Path to a CSV file to export the data to, relative to working dir.\
     e.g. `--csv=output/strings.csv`\
-    Default is empty, so no CSV file will be exported.
+    Default is empty, so no CSV file will be exported.\
+    If any errors, warnings, or timeouts are encountered during testing, a second file is also written alongside it with `-errors` appended to the name (e.g. `report-errors.csv`).
 
 * `--testVar=<varName>`
 
@@ -80,7 +86,26 @@ Run an out-of-content check to report.csv instead.\
 * `--maxChoices=<num>`
 
     If this is >=0, limits the number of choices tested at each choice point. This is useful to emulate a UI which only shows a limited set of choices at any one time. This assumes it's drawing from the top.\
-    e.g. `--maxChoices=3` means 'only test the first 3 of every set of choices'\
+    e.g. `--maxChoices=3` means 'only test the first 3 of every set of choices'
+
+* `--startKnot=<knot>`
+
+    Start each run from this knot instead of the beginning of the story. Can be specified multiple times; runs are distributed evenly across all specified knots. Useful when knots are meant to be called externally by game code.\
+    e.g. `--startKnot=CHAPTER_ONE --startKnot=CHAPTER_TWO`
+
+* `--startKnotsFile=<file>`
+
+    Load knot names from a text file (one per line) and use them as start knots, equivalent to specifying each with `--startKnot`.\
+    e.g. `--startKnotsFile=knots.txt`
+
+* `--testAllKnots`
+
+    Automatically discover all knots in the story (excluding functions and tunnels) and test each one. Shorthand for generating a knot list and passing it via `--startKnotsFile`.
+
+* `--listKnots=<file>`
+
+    Write all testable knot names (excluding functions and tunnels) to a text file, one per line, then exit without running any tests.\
+    e.g. `--listKnots=knots.txt`
 
 * `--ooc`
 
@@ -89,6 +114,23 @@ Run an out-of-content check to report.csv instead.\
 * `--help`
 
     This help!
+
+## Error Reporting
+
+Whenever a `--csv` path is supplied, a second file is automatically written alongside it with `-errors` appended to the name (e.g. `report-errors.csv`), **if** any issues were found during the test run. It contains the following columns:
+
+| Column | Description |
+|---|---|
+| Type | `Error`, `Warning`, or `Timeout` |
+| Error | The error or warning message |
+| Last Good File | The last Ink file successfully executed before the issue |
+| Last Good Line | The line number in that file |
+| Last Good Text | The text content of that line |
+| Trace | For timeouts only: the sequence of choices made during that run, to help reproduce the infinite loop |
+
+Duplicate entries (same type, message, and location) are deduplicated across all runs.
+
+**Timeouts** occur when a single `Continue()` call takes too long — usually a sign of an infinite divert loop inside a knot that the Ink engine doesn't catch. The trace column shows exactly which choices led there.
 
 ## Releases
 

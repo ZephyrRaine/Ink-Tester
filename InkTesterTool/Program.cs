@@ -2,6 +2,8 @@
 
 var options = new Tester.Options();
 var csvOptions = new CSVHandler.Options();
+string listKnotsPath = "";
+bool testAllKnots = false;
 
 // ----- Simple Args -----
 foreach (var arg in args)
@@ -18,6 +20,20 @@ foreach (var arg in args)
         csvOptions.outputFilePath = arg.Substring(6);
     else if (arg.StartsWith("--maxChoices="))
         options.maxChoices = int.Parse(arg.Substring(13));
+    else if (arg.StartsWith("--listKnots="))
+        listKnotsPath = arg.Substring(12);
+    else if (arg.Equals("--testAllKnots"))
+        testAllKnots = true;
+    else if (arg.StartsWith("--startKnot="))
+        options.startKnots.Add(arg.Substring(12));
+    else if (arg.StartsWith("--startKnotsFile=")) {
+        var path = arg.Substring(17);
+        if (!File.Exists(path)) {
+            Console.Error.WriteLine($"Error - can't find startKnotsFile: {path}");
+            return -1;
+        }
+        options.startKnots.AddRange(File.ReadAllLines(path).Where(l => !string.IsNullOrWhiteSpace(l)));
+    }
     else if (arg.StartsWith("--ooc"))
         options.ooc = true;
     else if (arg.StartsWith("--maxSteps="))
@@ -48,6 +64,13 @@ foreach (var arg in args)
         Console.WriteLine("  --maxChoices=<num> - Limits the number of choices to this number. Useful if your interface will only show the top N of choices.");
         Console.WriteLine("                      e.g. --maxChoices=3");
         Console.WriteLine("                      Default is -1, which means no limit.");
+        Console.WriteLine("  --startKnot=<knot> - Start each run from this knot instead of the story beginning.");
+        Console.WriteLine("  --startKnotsFile=<file> - Load knot names from a txt file (one per line) to use as start knots.");
+        Console.WriteLine("                       Can be specified multiple times; runs are distributed across all knots.");
+        Console.WriteLine("                       e.g. --startKnot=BUFFET_GAME --startKnot=INTRO");
+        Console.WriteLine("  --listKnots=<file> - Write all knot names to a txt file (one per line) and exit.");
+        Console.WriteLine("  --testAllKnots - Automatically find all knots and test each one. Shorthand for --listKnots + --startKnotsFile.");
+        Console.WriteLine("                       e.g. --listKnots=knots.txt");
         Console.WriteLine("  --ooc - Run an out-of-content check, instead of the normal coverage check.");
 
         return 0;
@@ -63,6 +86,22 @@ foreach (var arg in args)
         //options.testVar = "Testing";
         csvOptions.outputFilePath = "tests/report.csv";
     }
+}
+
+// ----- List Knots -----
+if (!string.IsNullOrEmpty(listKnotsPath)) {
+    var knotLister = new Tester(options);
+    if (!knotLister.WriteKnotList(listKnotsPath))
+        return -1;
+    return 0;
+}
+
+// ----- Test All Knots -----
+if (testAllKnots) {
+    var knots = new Tester(options).GetKnotNames();
+    if (knots == null) return -1;
+    Console.WriteLine($"Found {knots.Count} knots to test.");
+    options.startKnots.AddRange(knots);
 }
 
 // ----- Test Ink -----
@@ -105,6 +144,7 @@ if (!String.IsNullOrEmpty(csvOptions.outputFilePath)) {
         }
     }
     Console.WriteLine($"CSV file written: {csvOptions.outputFilePath}");
+    csvHandler.WriteErrorReport();
 }
 else {
     Console.Error.WriteLine("No CSV file path supplied - use --csv=<filename.csv>");

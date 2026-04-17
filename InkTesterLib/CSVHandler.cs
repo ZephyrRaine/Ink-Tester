@@ -59,6 +59,43 @@ namespace InkTester
             return true;
         }
 
+        public bool WriteErrorReport() {
+
+            if (_tester.ErrorLog.Count == 0)
+                return true;
+
+            string basePath = Path.GetFullPath(_options.outputFilePath);
+            string outputFilePath = Path.Combine(
+                Path.GetDirectoryName(basePath)!,
+                Path.GetFileNameWithoutExtension(basePath) + "-errors" + Path.GetExtension(basePath));
+
+            try {
+                StringBuilder output = new();
+                output.AppendLine("Type,Error,Last Good File,Last Good Line,Last Good Text,Trace");
+
+                var sorted = _tester.ErrorLog
+                    .OrderBy(e => e.Type)
+                    .ThenBy(e => e.LastGoodFileName)
+                    .ThenBy(e => e.LastGoodLineNumber)
+                    .ToList();
+
+                foreach (var entry in sorted) {
+                    var errorText = entry.ErrorText.Replace("\"", "\"\"");
+                    var lastGoodText = entry.LastGoodText.Replace("\"", "\"\"");
+                    var trace = entry.Trace.Replace("\"", "\"\"");
+                    output.AppendLine($"\"{entry.Type}\",\"{errorText}\",\"{entry.LastGoodFileName}\",{entry.LastGoodLineNumber},\"{lastGoodText}\",\"{trace}\"");
+                }
+
+                File.WriteAllText(outputFilePath, output.ToString(), Encoding.UTF8);
+                Console.WriteLine($"Error CSV written: {outputFilePath}");
+            }
+            catch (Exception ex) {
+                Console.Error.WriteLine($"Error writing error CSV {outputFilePath}: " + ex.Message);
+                return false;
+            }
+            return true;
+        }
+
         public bool WriteOOCReport(bool isOOC = false) {
 
             string outputFilePath = Path.GetFullPath(_options.outputFilePath);
