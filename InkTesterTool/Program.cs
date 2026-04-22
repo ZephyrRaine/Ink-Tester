@@ -150,4 +150,8 @@ else {
     Console.Error.WriteLine("No CSV file path supplied - use --csv=<filename.csv>");
 }
 
+if (tester.ErrorLog.Count > 0)
+    return 1;
+if (options.ooc && tester.OOCLog.Count > 0)
+    return 1;
 return 0;

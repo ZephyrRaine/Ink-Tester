@@ -277,7 +277,6 @@ namespace InkTester
 
         private bool TestRun(Ink.Runtime.Story story, LineTagger tagger, int runNum, Dictionary<string, HashSet<int>> runVisitLog) {
 
-            Console.WriteLine($"Test run {runNum+1}...");
 
             int steps = 0;
             var runTrace = new List<string>();
